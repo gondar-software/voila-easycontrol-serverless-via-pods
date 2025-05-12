@@ -25,3 +25,13 @@ class PodInfo:
     ):
         self.port_mappings = port_mappings
         self.public_ip = public_ip
+
+class Prompt:
+    def __init__(
+        self,
+        url: str,
+        workflow_id: int,
+    ):
+        self.url = url
+        self.workflow_id = workflow_id
+        self.data = None

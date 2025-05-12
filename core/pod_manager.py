@@ -1,0 +1,207 @@
+import requests
+import uuid
+import time
+from threading import \
+    Thread, \
+    Lock
+from typing import \
+    List, \
+    Optional, \
+    Dict
+
+from .types import \
+    GPUType, \
+    PodState, \
+    Prompt
+from .pod import \
+    Pod
+from .constants import \
+    POD_MAX_NUM, \
+    RUNPOD_API, \
+    POD_REQUEST_TIMEOUT_RETRY_MAX, \
+    POD_RETRY_DELAY
+
+class PodManager:
+    def __init__(
+        self, 
+        pre_name: str, 
+        template_id: str, 
+        volume_id: str, 
+        gpu_types: List[GPUType] = [GPUType.RTXA6000]
+    ):
+        self._lock = Lock()
+        self._pre_name = pre_name
+        self._template_id = template_id
+        self._volume_id = volume_id
+        self._gpu_types = gpu_types
+        self._api_key = RUNPOD_API
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json"
+        })
+
+        self._pods: List[Pod] = []
+        self._queued_prompts: List[Prompt] = []
+        self._processing_prompts: Dict[str, Prompt] = {}
+        self._completed_prompts: Dict[str, Prompt] = {}
+        self._failed_prompts: Dict[str, Prompt] = {}
+
+    @property
+    def session(self) -> requests.Session:
+        with self._lock:
+            return self._session
+
+    @property
+    def template_id(self) -> str:
+        with self._lock:
+            return self._template_id
+        
+    @property
+    def pre_name(self) -> str:
+        with self._lock:
+            return self._pre_name
+
+    @property 
+    def volume_id(self) -> str:
+        with self._lock:
+            return self._volume_id
+
+    @property
+    def gpu_types(self) -> List[GPUType]:
+        with self._lock:
+            return self._gpu_types
+        
+    @property
+    def pods(self) -> List[Pod]:
+        with self._lock:
+            return self._pods
+
+    @property
+    def queued_prompts(self) -> List[Prompt]:
+        with self._lock:
+            return self._queued_prompts
+        
+    @property
+    def processing_prompts(self) -> Dict[str, Prompt]:
+        with self._lock:
+            return self._processing_prompts
+        
+    @property
+    def completed_prompts(self) -> Dict[str, Prompt]:
+        with self._lock:
+            return self._completed_prompts
+
+    @property
+    def failed_prompts(self) -> Dict[str, Prompt]:
+        with self._lock:
+            return self._failed_prompts
+
+    def _check_existing_pods(
+        self
+    ):
+        try:
+            response = self.session.get(
+                "https://rest.runpod.io/v1/pods"
+            )
+            response.raise_for_status()
+            data = response.json()
+            for pod in data:
+                pod_id = pod.get("id", None)
+                if pod_id is not None and \
+                    Pod.check_pod(
+                        pod_id, 
+                        self.template_id, 
+                        self.volume_id, 
+                        self.gpu_types
+                    ):
+                    self.pods.append(Pod(
+                        f"{self.pre_name}-{uuid.uuid4()}",
+                        self.template_id,
+                        self.volume_id,
+                        self.gpu_types,
+                        pod_id=pod_id
+                    ))
+        except:
+            return
+
+    def _background_work(
+        self
+    ):
+        while True:
+            if len(self.pods) < POD_MAX_NUM:
+                self.pods.append(Pod(
+                    f"{self.pre_name}-{uuid.uuid4()}",
+                    self.template_id,
+                    self.volume_id,
+                    gpu_types=self.gpu_types
+                ))
+            elif len(self.pods) > POD_MAX_NUM:
+                extra_size = len(self.pods) - POD_MAX_NUM
+                terminated_count = 0
+
+                for pod in sorted(
+                    self.pods, 
+                    key=lambda pod: (
+                        pod.state == PodState.Stopped,
+                        pod.latest_updated_time
+                    )
+                ):
+                    if terminated_count >= extra_size:
+                        break
+                    if pod.state == PodState.Processing or \
+                        pod.state == PodState.Terminated or \
+                        pod.is_working:
+                        continue
+                    
+                    pod.state = PodState.Terminated
+                    terminated_count += 1
+
+            for _ in range(len(self.queued_prompts)):
+                for pod in sorted(
+                    self.pods,
+                    key=lambda pod: (
+                        pod.state != PodState.Free,
+                        pod.latest_updated_time
+                    ),
+                    reverse=True
+                ):
+                    if not pod.is_working:
+                        if pod.state == PodState.Terminated:
+                            continue
+                        if pod.state != PodState.Stopped or \
+                            pod.resume():
+                            thread = Thread(
+                                target=self._process_request,
+                                args=[pod, self.queued_prompts.pop()]
+                            )
+                            thread.daemon = True
+                            thread.start()
+                            break
+
+            for pod in self.pods:
+                if pod.latest_updated_time is not None and \
+                    time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
+                    pod.stop()
+                
+                if pod.state == PodState.Terminated:
+                    if pod.destroy():
+                        self.pods.remove(pod)
+
+            time.sleep(POD_RETRY_DELAY / 1000.)
+
+    def _process_request(
+        self,
+        pod: Pod,
+        prompt: Prompt
+    ):
+        id = uuid.uuid4()
+        self.processing_prompts[id] = prompt
+        response = pod.queue(prompt)
+        res_prompt = self.processing_prompts.pop(id)
+        res_prompt.data = response["data"]
+        if response["status"] == "success":
+            self.completed_prompts[id] = res_prompt
+        else:
+            self.failed_prompts[id] = res_prompt
+

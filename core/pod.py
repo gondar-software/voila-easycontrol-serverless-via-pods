@@ -1,14 +1,19 @@
 import requests
 import time
-from threading import Thread, Lock
-from typing import List, Optional
+from threading import \
+    Thread, \
+    Lock
+from typing import \
+    List, \
+    Optional
 
 from .utils import \
     terminate_thread
 from .types import \
     GPUType, \
     PodState, \
-    PodInfo
+    PodInfo, \
+    Prompt
 from .constants import \
     RUNPOD_API, \
     POD_RETRY_DELAY, \
@@ -24,8 +29,7 @@ class Pod:
         template_id: str, 
         volume_id: str, 
         gpu_types: List[GPUType] = [GPUType.RTXA6000], 
-        pod_id: Optional[str] = None,
-        is_working = False
+        pod_id: Optional[str] = None
     ):
         self._name = name,
         self._template_id = template_id,
@@ -36,7 +40,7 @@ class Pod:
         self._lock = Lock()
         self._latest_updated_time: Optional[float] = None
         self._state = PodState.Creating
-        self._is_working = is_working
+        self._is_working = False
         self._api_key = RUNPOD_API
         self._session = requests.Session()
         self._session.headers.update({
@@ -49,39 +53,41 @@ class Pod:
         )
         self._init_thread.daemon = True
         self._init_thread.start()
+        with self._lock:
+            return self._api_key
 
     @property
-    def name(self) -> Optional[str]:
+    def name(self) -> str:
         with self._lock:
             return self._name
     
     @property
-    def volume_id(self) -> Optional[str]:
+    def volume_id(self) -> str:
         with self._lock:
             return self._volume_id
 
     @property
-    def template_id(self) -> Optional[str]:
+    def template_id(self) -> str:
         with self._lock:
             return self._template_id
 
     @property
-    def gpu_types(self) -> Optional[List[GPUType]]:
+    def gpu_types(self) -> List[GPUType]:
         with self._lock:
             return self._gpu_types
 
     @property
-    def session(self) -> Optional[requests.Session]:
+    def session(self) -> requests.Session:
         with self._lock:
             return self._session
 
     @property
-    def state(self) -> Optional[PodState]:
+    def state(self) -> PodState:
         with self._lock:
             return self._state
     
     @state.setter
-    def state(self, value: Optional[PodState]) -> None:
+    def state(self, value: PodState) -> None:
         with self._lock:
             self._state = value
 
@@ -126,12 +132,12 @@ class Pod:
             self._init_thread = value
 
     @property
-    def is_working(self) -> Optional[bool]:
+    def is_working(self) -> bool:
         with self._lock:
             return self._is_working
         
     @is_working.setter
-    def is_working(self, value: Optional[bool]) -> None:
+    def is_working(self, value: bool) -> None:
         with self._lock:
             self._is_working = value
 
@@ -232,7 +238,8 @@ class Pod:
     @staticmethod
     def check_pod(
         pod_id: str, 
-        template_id, 
+        template_id: str, 
+        volume_id: str,
         gpu_types: List[GPUType] = [GPUType.RTXA6000]
     ):
         try:
@@ -248,15 +255,18 @@ class Pod:
             if "machine" in info:
                 machine = info["machine"]
                 gpuTypeId = machine.get("gpuTypeId", None)
-                if gpuTypeId in [gpu_type.name for gpu_type in gpu_types]:
+                templateId = machine.get("templateId", None)
+                networkVolume = machine.get("networkVolume", {})
+                if gpuTypeId in [gpu_type.name for gpu_type in gpu_types] and \
+                    template_id == templateId and \
+                    volume_id == networkVolume.get("id", None):
                     return True
         finally:
             return False    
 
     def queue(
         self, 
-        url, 
-        workflow_id
+        prompt: Prompt
     ):
         self.is_working = True
         self.latest_updated_time = time.time()
@@ -269,30 +279,35 @@ class Pod:
                 time.sleep(POD_RETRY_DELAY / 1000.)
             elif self.state == PodState.Terminated or PodState.Stopped:
                 self._is_working = False
+                self.latest_updated_time = time.time()
                 return {
                     "status": "error",
                     "data": "Pod is not working."
                 }
         else:
+            self.latest_updated_time = time.time()
             self._is_working = False
             return {
                 "status": "error",
                 "data": "Processing timeout."
             }
 
+        self.state = PodState.Processing
         public_ip, port = self.pod_info.public_ip, self.pod_info.port_mappings["8188"]
 
         try:
             response = requests.post(
                 f"http://{public_ip}:{port}/process",
                 json={
-                    "url": url,
-                    "workflow_id": workflow_id
+                    "url": prompt.url,
+                    "workflow_id": prompt.workflow_id
                 },
                 timeout=POD_REQUEST_TIMEOUT_RETRY_MAX
             )
             response.raise_for_status()
             self._is_working = False
+            self.state = PodState.Free
+            self.latest_updated_time = time.time()
             return {
                 "status": "success",
                 "data": {
@@ -302,6 +317,8 @@ class Pod:
             }
         except:
             self._is_working = False
+            self.state = PodState.Free
+            self.latest_updated_time = time.time()
             return {
                 "status": "error",
                 "data": "Unknown error occurred."
