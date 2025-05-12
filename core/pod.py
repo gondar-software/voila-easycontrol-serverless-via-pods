@@ -180,7 +180,8 @@ class Pod:
                 )
                 response.raise_for_status()
                 return response.json().get("id", "")
-            except:
+            except Exception as e:
+                print(f"Error creating pod: {e}")
                 retries += 1
                 time.sleep(POD_RETRY_DELAY / 1000.)
                 continue

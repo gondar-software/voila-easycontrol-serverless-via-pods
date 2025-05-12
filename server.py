@@ -7,13 +7,10 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from runpod import AsyncioEndpoint, AsyncioJob
-from dotenv import load_dotenv
 import os
 import time
 from typing import Dict
 from threading import Thread, Lock
-
-load_dotenv()
 
 from core.pod_manager import PodManager
 from core.constants import \
@@ -186,7 +183,6 @@ async def restart_service():
     return {"status": "restarted"}
 
 def set_max_threads():
-    print(POD_MAX_NUM)
     new_max_workers = POD_MAX_NUM * 2
     executor = ThreadPoolExecutor(max_workers=new_max_workers)
     loop = asyncio.get_event_loop()
