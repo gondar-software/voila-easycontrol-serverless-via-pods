@@ -13,6 +13,8 @@ import time
 from typing import Dict
 from threading import Thread, Lock
 
+load_dotenv()
+
 from core.pod_manager import PodManager
 from core.constants import \
     POD_EASYCONTROL_TEMPLATE_ID, \
@@ -21,8 +23,6 @@ from core.constants import \
     ORIGIN_IMAGE_URL, \
     POD_MAX_NUM
 from core.types import PodState, Prompt
-
-load_dotenv()
 
 class RequestCounter:
     def __init__(self):
@@ -130,22 +130,21 @@ async def process_prompt(query: dict):
         workflow_id = query.get("workflow_id", 1)
         
         if current_count % 2 == 0:
-            if workflow_id in {1, 2, 4, 5, 6}:
-                result = await asyncio.to_thread(
-                    app_state.managers["easycontrol"].queue_prompt,
-                    Prompt(
-                        url,
-                        workflow_id
-                    )
+            result = await asyncio.to_thread(
+                app_state.managers["easycontrol"].queue_prompt,
+                Prompt(
+                    url,
+                    workflow_id
                 )
-                
-                if result.status == "success":
-                    print(f"mode1: {(time.time() - start_time):.4f} seconds")
-                    return Response(
-                        content=result.data["content"],
-                        media_type=result.data["media_type"]
-                    )
-                raise HTTPException(500, detail=f"Processing error: {result.data}")
+            )
+            
+            if result.status == "success":
+                print(f"mode1: {(time.time() - start_time):.4f} seconds")
+                return Response(
+                    content=result.data["content"],
+                    media_type=result.data["media_type"]
+                )
+            raise HTTPException(500, detail=f"Processing error: {result.data}")
         else:
             output = await run_remote_job(
                 url,
@@ -187,6 +186,7 @@ async def restart_service():
     return {"status": "restarted"}
 
 def set_max_threads():
+    print(POD_MAX_NUM)
     new_max_workers = POD_MAX_NUM * 2
     executor = ThreadPoolExecutor(max_workers=new_max_workers)
     loop = asyncio.get_event_loop()

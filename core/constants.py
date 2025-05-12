@@ -1,7 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 RUNPOD_API = os.getenv('RUNPOD_API', None)
 
