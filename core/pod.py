@@ -3,6 +3,8 @@ import time
 from threading import Thread, Lock
 from typing import List, Optional
 
+from .utils import \
+    terminate_thread
 from .types import \
     GPUType, \
     PodState, \
@@ -22,7 +24,8 @@ class Pod:
         template_id: str, 
         volume_id: str, 
         gpu_types: List[GPUType] = [GPUType.RTXA6000], 
-        pod_id: Optional[str] = None
+        pod_id: Optional[str] = None,
+        is_working = False
     ):
         self._name = name,
         self._template_id = template_id,
@@ -33,12 +36,19 @@ class Pod:
         self._lock = Lock()
         self._latest_updated_time: Optional[float] = None
         self._state = PodState.Creating
+        self._is_working = is_working
         self._api_key = RUNPOD_API
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json"
         })
+
+        self._init_thread = Thread(
+            target=self._initialize
+        )
+        self._init_thread.daemon = True
+        self._init_thread.start()
 
     @property
     def name(self) -> Optional[str]:
@@ -104,6 +114,26 @@ class Pod:
     def latest_updated_time(self, value: Optional[float]) -> None:
         with self._lock:
             self._latest_updated_time = value
+
+    @property
+    def init_thread(self) -> Optional[Thread]:
+        with self._lock:
+            return self._init_thread
+    
+    @init_thread.setter
+    def init_thread(self, value: Optional[Thread]) -> None:
+        with self._lock:
+            self._init_thread = value
+
+    @property
+    def is_working(self) -> Optional[bool]:
+        with self._lock:
+            return self._is_working
+        
+    @is_working.setter
+    def is_working(self, value: Optional[bool]) -> None:
+        with self._lock:
+            self._is_working = value
 
     def _initialize(
         self
@@ -228,6 +258,7 @@ class Pod:
         url, 
         workflow_id
     ):
+        self.is_working = True
         self.latest_updated_time = time.time()
         while time.time() - self.latest_updated_time < POD_REQUEST_TIMEOUT_RETRY_MAX:
             if self.state == PodState.Free:
@@ -237,11 +268,13 @@ class Pod:
                 self.state == PodState.Processing:
                 time.sleep(POD_RETRY_DELAY / 1000.)
             elif self.state == PodState.Terminated or PodState.Stopped:
+                self._is_working = False
                 return {
                     "status": "error",
                     "data": "Pod is not working."
                 }
         else:
+            self._is_working = False
             return {
                 "status": "error",
                 "data": "Processing timeout."
@@ -259,6 +292,7 @@ class Pod:
                 timeout=POD_REQUEST_TIMEOUT_RETRY_MAX
             )
             response.raise_for_status()
+            self._is_working = False
             return {
                 "status": "success",
                 "data": {
@@ -267,6 +301,7 @@ class Pod:
                 }
             }
         except:
+            self._is_working = False
             return {
                 "status": "error",
                 "data": "Unknown error occurred."
@@ -280,6 +315,10 @@ class Pod:
                 f"https://rest.runpod.io/v1/pods/{self.pod_id}/stop"
             )
             response.raise_for_status()
+            try:
+                terminate_thread(self.init_thread)
+            except:
+                pass
             self.pod_info = None
             self.state = PodState.Stopped
             return True
@@ -296,11 +335,11 @@ class Pod:
             response.raise_for_status()
             self.pod_info = None
             self.state = PodState.Creating
-            thread = Thread(
+            self.init_thread = Thread(
                 target=self._initialize
             )
-            thread.daemon = True
-            thread.start()
+            self.init_thread.daemon = True
+            self.init_thread.start()
             return True
         except:
             return False
@@ -313,6 +352,10 @@ class Pod:
                 f"https://rest.runpod.io/v1/pods/{self.pod_id}"
             )
             response.raise_for_status()
+            try:
+                terminate_thread(self.init_thread)
+            except:
+                pass
             return True
         except:
             return False
