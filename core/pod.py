@@ -221,7 +221,7 @@ class Pod:
                 if gpuTypeId in [gpu_type.name for gpu_type in gpu_types]:
                     return True
         finally:
-            return False        
+            return False    
 
     def queue(
         self, 
@@ -270,19 +270,51 @@ class Pod:
             return {
                 "status": "error",
                 "data": "Unknown error occurred."
-            }
+            }    
 
-    def _destroy(
+    def stop(
         self
     ):
-        while True:
-            try:
-                response = self.session.delete(
-                    f"https://rest.runpod.io/v1/pods/{self.pod_id}"
-                )
-                response.raise_for_status()
-                return
-            except:
-                time.sleep(POD_RETRY_DELAY / 1000.)
+        try:
+            response = self.session.post(
+                f"https://rest.runpod.io/v1/pods/{self.pod_id}/stop"
+            )
+            response.raise_for_status()
+            self.pod_info = None
+            self.state = PodState.Stopped
+            return True
+        except:
+            return False
+
+    def resume(
+        self
+    ) -> bool:
+        try:
+            response = self.session.post(
+                f"https://rest.runpod.io/v1/pods/{self.pod_id}/start"
+            )
+            response.raise_for_status()
+            self.pod_info = None
+            self.state = PodState.Creating
+            thread = Thread(
+                target=self._initialize
+            )
+            thread.daemon = True
+            thread.start()
+            return True
+        except:
+            return False
+
+    def destroy(
+        self
+    ) -> bool:
+        try:
+            response = self.session.delete(
+                f"https://rest.runpod.io/v1/pods/{self.pod_id}"
+            )
+            response.raise_for_status()
+            return True
+        except:
+            return False
 
     
