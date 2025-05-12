@@ -143,7 +143,7 @@ class PodManager:
                 pod_id = pod.get("id", None)
                 pod_name = pod.get("name", None)
                 if pod_id is not None and \
-                    pod_name is not None and \
+                    pod_name.startswith(self.pre_name) and \
                     Pod.check_pod(
                         pod_id, 
                         self.template_id, 
