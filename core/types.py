@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 class GPUType(Enum):
     RTX4090 = "NVIDIA GeForce RTX 4090"
@@ -34,4 +34,13 @@ class Prompt:
     ):
         self.url = url
         self.workflow_id = workflow_id
-        self.data = None
+        self.result: Optional[PromptResult] = None
+
+class PromptResult:
+    def __init__(
+        self,
+        status: str,
+        data
+    ):
+        self.status = status
+        self.data = data

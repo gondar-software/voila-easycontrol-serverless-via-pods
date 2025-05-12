@@ -6,13 +6,13 @@ from threading import \
     Lock
 from typing import \
     List, \
-    Optional, \
     Dict
 
 from .types import \
     GPUType, \
     PodState, \
-    Prompt
+    Prompt, \
+    PromptResult
 from .pod import \
     Pod
 from .constants import \
@@ -42,10 +42,9 @@ class PodManager:
         })
 
         self._pods: List[Pod] = []
-        self._queued_prompts: List[Prompt] = []
+        self._queued_prompts: Dict[str, Prompt] = {}
         self._processing_prompts: Dict[str, Prompt] = {}
         self._completed_prompts: Dict[str, Prompt] = {}
-        self._failed_prompts: Dict[str, Prompt] = {}
         self._stopped = False
 
         self._initialize()
@@ -81,7 +80,7 @@ class PodManager:
             return self._pods
 
     @property
-    def queued_prompts(self) -> List[Prompt]:
+    def queued_prompts(self) -> Dict[str, Prompt]:
         with self._lock:
             return self._queued_prompts
         
@@ -94,11 +93,6 @@ class PodManager:
     def completed_prompts(self) -> Dict[str, Prompt]:
         with self._lock:
             return self._completed_prompts
-
-    @property
-    def failed_prompts(self) -> Dict[str, Prompt]:
-        with self._lock:
-            return self._failed_prompts
         
     @property
     def stopped(self) -> bool:
@@ -123,8 +117,7 @@ class PodManager:
             prompts_by_state = {
                 "queued": len(self._queued_prompts),
                 "processing": len(self._processing_prompts),
-                "completed": len(self._completed_prompts),
-                "failed": len(self._failed_prompts)
+                "completed": len(self._completed_prompts)
             }
 
             return pods_by_state, prompts_by_state
@@ -213,9 +206,10 @@ class PodManager:
                             continue
                         if pod.state != PodState.Stopped or \
                             pod.resume():
+                            key = self.queued_prompts.keys()[0]
                             thread = Thread(
                                 target=self._process_request,
-                                args=[pod, self.queued_prompts.pop()]
+                                args=[pod, key, self.queued_prompts.pop(key)]
                             )
                             thread.daemon = True
                             thread.start()
@@ -235,19 +229,33 @@ class PodManager:
     def _process_request(
         self,
         pod: Pod,
+        id: str,
         prompt: Prompt
     ):
-        id = uuid.uuid4()
         self.processing_prompts[id] = prompt
         response = pod.queue(prompt)
         res_prompt = self.processing_prompts.pop(id)
-        res_prompt.data = response["data"]
-        if response["status"] == "success":
-            self.completed_prompts[id] = res_prompt
-        else:
-            self.failed_prompts[id] = res_prompt
+        res_prompt.result = response
+        self.completed_prompts[id] = res_prompt
 
-    def stop(self):
+    def queue_prompt(
+        self, 
+        prompt: Prompt
+    ) -> PromptResult:
+        id = uuid.uuid4()
+        key = str(id)
+        self.queued_prompts[key] = prompt
+
+        while True:
+            res_prompt = self.completed_prompts.pop(key, None)
+            if res_prompt is not None:
+                return res_prompt.result
+            else:
+                time.sleep(POD_RETRY_DELAY, 1000.)
+
+    def stop(
+        self
+    ):
         self.stopped = True
         for pod in self.pods:
             while not pod.destroy():

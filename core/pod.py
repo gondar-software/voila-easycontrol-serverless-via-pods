@@ -13,7 +13,8 @@ from .types import \
     GPUType, \
     PodState, \
     PodInfo, \
-    Prompt
+    Prompt, \
+    PromptResult
 from .constants import \
     RUNPOD_API, \
     POD_RETRY_DELAY, \
@@ -267,7 +268,7 @@ class Pod:
     def queue(
         self, 
         prompt: Prompt
-    ):
+    ) -> PromptResult:
         self.is_working = True
         self.latest_updated_time = time.time()
         while time.time() - self.latest_updated_time < POD_REQUEST_TIMEOUT_RETRY_MAX:
@@ -280,17 +281,17 @@ class Pod:
             elif self.state == PodState.Terminated or PodState.Stopped:
                 self._is_working = False
                 self.latest_updated_time = time.time()
-                return {
-                    "status": "error",
-                    "data": "Pod is not working."
-                }
+                return PromptResult(
+                    "error",
+                    "Pod is not working."
+                )
         else:
             self.latest_updated_time = time.time()
             self._is_working = False
-            return {
-                "status": "error",
-                "data": "Processing timeout."
-            }
+            return PromptResult(
+                "error",
+                "Processing timeout."
+            )
 
         self.state = PodState.Processing
         public_ip, port = self.pod_info.public_ip, self.pod_info.port_mappings["8188"]
@@ -308,21 +309,21 @@ class Pod:
             self._is_working = False
             self.state = PodState.Free
             self.latest_updated_time = time.time()
-            return {
-                "status": "success",
-                "data": {
+            return PromptResult(
+                "success",
+                {
                     "content": response.content,
                     "media_type": response.headers.get("content-type", "image/jpeg")
                 }
-            }
+            )
         except:
             self._is_working = False
             self.state = PodState.Free
             self.latest_updated_time = time.time()
-            return {
-                "status": "error",
-                "data": "Unknown error occurred."
-            }    
+            return PromptResult(
+                "error",
+                "Unknown error occurred."
+            ) 
 
     def stop(
         self
