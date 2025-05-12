@@ -99,7 +99,7 @@ class PodManager:
         with self._lock:
             return self._stopped
         
-    @property
+    @stopped.setter
     def stopped(self, value: bool):
         with self._lock:
             self._stopped = value

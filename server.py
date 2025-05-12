@@ -18,7 +18,8 @@ from core.constants import \
     POD_EASYCONTROL_TEMPLATE_ID, \
     POD_EASYCONTROL_STORAGE_ID, \
     SERVERLESS_EASYCONTROL_ENDPOINT_ID, \
-    ORIGIN_IMAGE_URL
+    ORIGIN_IMAGE_URL, \
+    POD_MAX_NUM
 from core.types import PodState, Prompt
 
 load_dotenv()
@@ -51,9 +52,9 @@ async def log_state():
         if app_state.managers.get("easycontrol"):
             pod_state, prompt_state = app_state.managers["easycontrol"].state
             print(
-                f"{pod_state[PodState.Creating]}  {pod_state[PodState.Starting]}  "
-                f"{pod_state[PodState.Processing]}  {pod_state[PodState.Free]}  "
-                f"{pod_state[PodState.Stopped]}  {pod_state[PodState.Terminated]}  "
+                f"{pod_state.get(PodState.Creating, 0)}  {pod_state.get(PodState.Starting, 0)}  "
+                f"{pod_state.get(PodState.Processing, 0)}  {pod_state.get(PodState.Free, 0)}  "
+                f"{pod_state.get(PodState.Stopped, 0)}  {pod_state.get(PodState.Terminated, 0)}  "
                 f"{prompt_state["queued"]}  {prompt_state["processing"]}  "
                 f"{prompt_state["completed"]}  ",
                 end="\r"
@@ -186,7 +187,7 @@ async def restart_service():
     return {"status": "restarted"}
 
 def set_max_threads():
-    new_max_workers = 150
+    new_max_workers = POD_MAX_NUM * 2
     executor = ThreadPoolExecutor(max_workers=new_max_workers)
     loop = asyncio.get_event_loop()
     loop.set_default_executor(executor)
@@ -195,8 +196,8 @@ if __name__ == "__main__":
     import uvicorn
     
     uvicorn.run(
-        app="server_ab_test:app",
+        app="server:app",
         host="localhost",
         reload=False,
-        port=8088
+        port=8188
     )

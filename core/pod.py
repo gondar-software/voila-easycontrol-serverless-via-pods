@@ -54,8 +54,6 @@ class Pod:
         )
         self._init_thread.daemon = True
         self._init_thread.start()
-        with self._lock:
-            return self._api_key
 
     @property
     def name(self) -> str:
