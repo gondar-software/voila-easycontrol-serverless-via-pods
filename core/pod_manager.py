@@ -46,6 +46,9 @@ class PodManager:
         self._processing_prompts: Dict[str, Prompt] = {}
         self._completed_prompts: Dict[str, Prompt] = {}
         self._failed_prompts: Dict[str, Prompt] = {}
+        self._stopped = False
+
+        self._initialize()
 
     @property
     def session(self) -> requests.Session:
@@ -96,6 +99,43 @@ class PodManager:
     def failed_prompts(self) -> Dict[str, Prompt]:
         with self._lock:
             return self._failed_prompts
+        
+    @property
+    def stopped(self) -> bool:
+        with self._lock:
+            return self._stopped
+        
+    @property
+    def stopped(self, value: bool):
+        with self._lock:
+            self._stopped = value
+        
+    @property
+    def state(self):
+        with self._lock:
+            pods_by_state = {}
+            for pod in self._pods:
+                if pod.state in pods_by_state:
+                    pods_by_state[pod.state] += 1
+                else:
+                    pods_by_state[pod.state] = 1
+
+            prompts_by_state = {
+                "queued": len(self._queued_prompts),
+                "processing": len(self._processing_prompts),
+                "completed": len(self._completed_prompts),
+                "failed": len(self._failed_prompts)
+            }
+
+            return pods_by_state, prompts_by_state
+
+    def _initialize(self):
+        self._check_existing_pods()
+        background_thread = Thread(
+            target=self._background_work
+        )
+        background_thread.daemon = True
+        background_thread.start()
 
     def _check_existing_pods(
         self
@@ -108,7 +148,9 @@ class PodManager:
             data = response.json()
             for pod in data:
                 pod_id = pod.get("id", None)
+                pod_name = pod.get("name", None)
                 if pod_id is not None and \
+                    pod_name is not None and \
                     Pod.check_pod(
                         pod_id, 
                         self.template_id, 
@@ -116,7 +158,7 @@ class PodManager:
                         self.gpu_types
                     ):
                     self.pods.append(Pod(
-                        f"{self.pre_name}-{uuid.uuid4()}",
+                        pod_name,
                         self.template_id,
                         self.volume_id,
                         self.gpu_types,
@@ -128,7 +170,7 @@ class PodManager:
     def _background_work(
         self
     ):
-        while True:
+        while not self.stopped:
             if len(self.pods) < POD_MAX_NUM:
                 self.pods.append(Pod(
                     f"{self.pre_name}-{uuid.uuid4()}",
@@ -204,4 +246,10 @@ class PodManager:
             self.completed_prompts[id] = res_prompt
         else:
             self.failed_prompts[id] = res_prompt
+
+    def stop(self):
+        self.stopped = True
+        for pod in self.pods:
+            while not pod.destroy():
+                continue
 
