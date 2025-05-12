@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+runpod
+python-dotenv
+asyncio
+aiohttp
+pillow
+numpy
