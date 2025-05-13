@@ -29,6 +29,7 @@ class Pod:
         name: str, 
         template_id: str, 
         volume_id: str, 
+        image_name: str,
         gpu_types: List[GPUType] = [GPUType.RTXA6000], 
         pod_id: Optional[str] = None
     ):
@@ -36,10 +37,11 @@ class Pod:
         self._template_id = template_id,
         self._volume_id = volume_id,
         self._gpu_types = gpu_types
+        self._image_name = image_name
         self._pod_id: Optional[str] = pod_id
         self._pod_info: Optional[PodInfo] = None
         self._lock = Lock()
-        self._latest_updated_time: Optional[float] = None
+        self._latest_updated_time: float = 0
         self._state = PodState.Creating
         self._is_working = False
         self._api_key = RUNPOD_API
@@ -64,6 +66,11 @@ class Pod:
     def volume_id(self) -> str:
         with self._lock:
             return self._volume_id
+        
+    @property
+    def image_name(self) -> str:
+        with self._lock:
+            return self._image_name
 
     @property
     def template_id(self) -> str:
@@ -111,12 +118,12 @@ class Pod:
             self._pod_info = value
 
     @property
-    def latest_updated_time(self) -> Optional[float]:
+    def latest_updated_time(self) -> float:
         with self._lock:
             return self._latest_updated_time
     
     @latest_updated_time.setter
-    def latest_updated_time(self, value: Optional[float]) -> None:
+    def latest_updated_time(self, value: float) -> None:
         with self._lock:
             self._latest_updated_time = value
 
@@ -146,16 +153,21 @@ class Pod:
         try:
             if self.pod_id is None:
                 self.pod_id = self._create_pod()
-            if self.pod_id is None:
-                return
+                if self.pod_id is None:
+                    return
 
-            self.pod_info = self._get_pod_info()
-            if self.pod_info is None:
-                return
+                self.pod_info = self._get_pod_info()
+                if self.pod_info is None:
+                    return
+
+            else:
+                self.pod_info = self._resume_pod_and_get_pod_info()
+                if self.pod_info is None:
+                    return
 
             self._check_server()
             
-        except:
+        except Exception as e:
             self.state = PodState.Terminated
 
     def _create_pod(
@@ -163,9 +175,12 @@ class Pod:
     ) -> Optional[str]:
         payload = {
             "gpuTypeIds": [gpu_type.value for gpu_type in self.gpu_types],
-            "name": self.name,
-            "networkVolumeId": self.volume_id,
-            "templateId": self.template_id,
+            "name": self.name[0],
+            "gpuCount": 1,
+            "networkVolumeId": self.volume_id[0],
+            "imageName": self.image_name,
+            "templateId": self.template_id[0],
+            "supportPublicIp": True,
             "ports": [
                 "8188/tcp"
             ]
@@ -181,7 +196,6 @@ class Pod:
                 response.raise_for_status()
                 return response.json().get("id", "")
             except Exception as e:
-                print(f"Error creating pod: {e}")
                 retries += 1
                 time.sleep(POD_RETRY_DELAY / 1000.)
                 continue
@@ -199,14 +213,45 @@ class Pod:
                 )
                 response.raise_for_status()
                 data = response.json()
-
-                if "portMappings" in data and "publicIp" in data:
+                port_mappings = data.get("portMappings", None)
+                public_ip = data.get("publicIp", "")
+                if port_mappings and public_ip != "":
                     self.state = PodState.Starting
-                    return PodInfo(data["portMappings"], data["publicIp"])
+                    return PodInfo(port_mappings, public_ip)
+            except:
+                pass
+            
+            retries += 1
+            time.sleep(POD_RETRY_DELAY / 1000.)
 
-            finally:
-                retries += 1
-                time.sleep(POD_RETRY_DELAY / 1000.)
+        else:
+            self.state = PodState.Terminated
+
+    def _resume_pod_and_get_pod_info(
+        self
+    ) -> Optional[PodInfo]:
+        retries = 0
+        init = True
+        while retries < POD_START_RETRY_MAX:
+            try:
+                response = self.session.get(
+                    f"https://rest.runpod.io/v1/pods/{self.pod_id}"
+                )
+                response.raise_for_status()
+                data = response.json()
+                port_mappings = data.get("portMappings", None)
+                public_ip = data.get("publicIp", "")
+                if port_mappings and public_ip != "":
+                    self.state = PodState.Starting
+                    return PodInfo(port_mappings, public_ip)
+                elif (port_mappings is None or public_ip == "") and init:
+                    init = False
+                    self.resume()
+            except:
+                pass
+            
+            retries += 1
+            time.sleep(POD_RETRY_DELAY / 1000.)
 
         else:
             self.state = PodState.Terminated
@@ -229,9 +274,11 @@ class Pod:
                     self.latest_updated_time = time.time()
                     self.state = PodState.Free
                     return
-            finally:
-                retries += 1
-                time.sleep(POD_RETRY_DELAY / 1000.)
+            except:
+                pass
+            
+            retries += 1
+            time.sleep(POD_RETRY_DELAY / 1000.)
         else:
             self.state = PodState.Terminated
 
@@ -240,7 +287,7 @@ class Pod:
         pod_id: str, 
         template_id: str, 
         volume_id: str,
-        gpu_types: List[GPUType] = [GPUType.RTXA6000]
+        image_name: str
     ):
         try:
             response = requests.get(
@@ -252,17 +299,17 @@ class Pod:
             )
             response.raise_for_status()
             info = response.json()
-            if "machine" in info:
-                machine = info["machine"]
-                gpuTypeId = machine.get("gpuTypeId", None)
-                templateId = machine.get("templateId", None)
-                networkVolume = machine.get("networkVolume", {})
-                if gpuTypeId in [gpu_type.name for gpu_type in gpu_types] and \
-                    template_id == templateId and \
-                    volume_id == networkVolume.get("id", None):
-                    return True
-        finally:
-            return False    
+            templateId = info.get("templateId", '')
+            networkVolumeId = info.get("networkVolumeId", '')
+            imageName = info.get("imageName", '')
+            if template_id == templateId and \
+                volume_id == networkVolumeId and \
+                image_name == imageName:
+                return True
+        except:
+            pass
+            
+        return False    
 
     def queue(
         self, 

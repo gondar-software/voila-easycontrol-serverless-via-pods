@@ -16,6 +16,7 @@ from core.pod_manager import PodManager
 from core.constants import \
     POD_EASYCONTROL_TEMPLATE_ID, \
     POD_EASYCONTROL_STORAGE_ID, \
+    POD_EASYCONTROL_IMAGE_NAME, \
     SERVERLESS_EASYCONTROL_ENDPOINT_ID, \
     ORIGIN_IMAGE_URL, \
     POD_MAX_NUM
@@ -65,7 +66,8 @@ async def lifespan(app: FastAPI):
     app_state.managers["easycontrol"] = PodManager(
         "pod-easycontrol",
         POD_EASYCONTROL_TEMPLATE_ID,
-        POD_EASYCONTROL_STORAGE_ID
+        POD_EASYCONTROL_STORAGE_ID,
+        POD_EASYCONTROL_IMAGE_NAME
     )
     
     app_state.logging_thread = Thread(
@@ -98,7 +100,7 @@ async def run_remote_job(url: str, workflow_id: int):
     """Generic function to run jobs on remote endpoints"""
     try:
         async with aiohttp.ClientSession() as session:
-            endpoint = AsyncioEndpoint(os.getenv(f"ENDPOINT_ID{SERVERLESS_EASYCONTROL_ENDPOINT_ID}"), session)
+            endpoint = AsyncioEndpoint(SERVERLESS_EASYCONTROL_ENDPOINT_ID, session)
             job: AsyncioJob = await endpoint.run({
                 "url": url,
                 "workflow_id": workflow_id
@@ -173,7 +175,8 @@ async def restart_service():
     app_state.managers["easycontrol"] = PodManager(
         "pod-easycontrol",
         POD_EASYCONTROL_TEMPLATE_ID,
-        POD_EASYCONTROL_STORAGE_ID
+        POD_EASYCONTROL_STORAGE_ID,
+        POD_EASYCONTROL_IMAGE_NAME
     )
     app_state.logging_thread = Thread(
         target=lambda: asyncio.run(log_state()),

@@ -27,12 +27,14 @@ class PodManager:
         pre_name: str, 
         template_id: str, 
         volume_id: str, 
+        image_name: str,
         gpu_types: List[GPUType] = [GPUType.RTXA6000]
     ):
         self._lock = Lock()
         self._pre_name = pre_name
         self._template_id = template_id
         self._volume_id = volume_id
+        self._image_name = image_name
         self._gpu_types = gpu_types
         self._api_key = RUNPOD_API
         self._session = requests.Session()
@@ -68,6 +70,11 @@ class PodManager:
     def volume_id(self) -> str:
         with self._lock:
             return self._volume_id
+        
+    @property
+    def image_name(self) -> str:
+        with self._lock:
+            return self._image_name
 
     @property
     def gpu_types(self) -> List[GPUType]:
@@ -142,18 +149,19 @@ class PodManager:
             for pod in data:
                 pod_id = pod.get("id", None)
                 pod_name = pod.get("name", None)
-                if pod_id is not None and \
-                    pod_name.startswith(self.pre_name) and \
+                if pod_id and \
+                    str(pod_name).startswith(self.pre_name) and \
                     Pod.check_pod(
                         pod_id, 
                         self.template_id, 
                         self.volume_id, 
-                        self.gpu_types
+                        self.image_name
                     ):
                     self.pods.append(Pod(
                         pod_name,
                         self.template_id,
                         self.volume_id,
+                        self.image_name,
                         self.gpu_types,
                         pod_id=pod_id
                     ))
@@ -169,6 +177,7 @@ class PodManager:
                     f"{self.pre_name}-{uuid.uuid4()}",
                     self.template_id,
                     self.volume_id,
+                    self.image_name,
                     gpu_types=self.gpu_types
                 ))
             elif len(self.pods) > POD_MAX_NUM:
@@ -198,25 +207,30 @@ class PodManager:
                     key=lambda pod: (
                         pod.state != PodState.Free,
                         pod.latest_updated_time
-                    ),
-                    reverse=True
+                    )
                 ):
-                    if not pod.is_working:
-                        if pod.state == PodState.Terminated:
-                            continue
-                        if pod.state != PodState.Stopped or \
-                            pod.resume():
-                            key = self.queued_prompts.keys()[0]
-                            thread = Thread(
-                                target=self._process_request,
-                                args=[pod, key, self.queued_prompts.pop(key)]
-                            )
-                            thread.daemon = True
-                            thread.start()
-                            break
+                    if pod.is_working:
+                        continue
+                        
+                    if pod.state == PodState.Terminated:
+                        continue
+                        
+                    if pod.state == PodState.Stopped and not pod.resume():
+                        continue
+                        
+                    key = next(iter(self.queued_prompts))
+                    prompt = self.queued_prompts.pop(key)
+                    
+                    thread = Thread(
+                        target=self._process_request,
+                        args=(pod, key, prompt),
+                        daemon=True
+                    )
+                    thread.start()
+                    break
 
             for pod in self.pods:
-                if pod.latest_updated_time is not None and \
+                if pod.latest_updated_time != 0 and \
                     time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
                     pod.stop()
                 
@@ -248,10 +262,10 @@ class PodManager:
 
         while True:
             res_prompt = self.completed_prompts.pop(key, None)
-            if res_prompt is not None:
+            if res_prompt:
                 return res_prompt.result
             else:
-                time.sleep(POD_RETRY_DELAY, 1000.)
+                time.sleep(POD_RETRY_DELAY / 1000.)
 
     def stop(
         self
