@@ -187,7 +187,9 @@ class PodManager:
                 for pod in sorted(
                     self.pods, 
                     key=lambda pod: (
-                        pod.state == PodState.Stopped,
+                        pod.state != PodState.Stopped,
+                        pod.state != PodState.Creating,
+                        pod.state != PodState.Starting,
                         pod.latest_updated_time
                     )
                 ):
@@ -205,9 +207,13 @@ class PodManager:
                 for pod in sorted(
                     self.pods,
                     key=lambda pod: (
-                        pod.state != PodState.Free,
+                        not pod.is_working,
+                        pod.state == PodState.Free,
+                        pod.state == PodState.Starting,
+                        pod.state == PodState.Creating,
                         pod.latest_updated_time
-                    )
+                    ),
+                    reverse=True
                 ):
                     if pod.is_working:
                         continue
@@ -229,16 +235,23 @@ class PodManager:
                     thread.start()
                     break
 
-            for pod in self.pods:
-                if pod.latest_updated_time != 0 and \
-                    time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
+            for pod in sorted(
+                    self.pods, 
+                    key=lambda pod: (
+                        pod.state != PodState.Stopped,
+                        pod.state != PodState.Creating,
+                        pod.state != PodState.Starting,
+                        pod.latest_updated_time
+                    )
+                ):
+                if time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
                     pod.stop()
                 
                 if pod.state == PodState.Terminated:
                     if pod.destroy():
                         self.pods.remove(pod)
 
-            time.sleep(POD_RETRY_DELAY / 1000.)
+            time.sleep(50 / 1000.)
 
     def _process_request(
         self,
