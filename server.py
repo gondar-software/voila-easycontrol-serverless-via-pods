@@ -143,6 +143,7 @@ async def process_prompt(query: dict):
                     content=result.data["content"],
                     media_type=result.data["media_type"]
                 )
+            print(result.data)
             raise HTTPException(500, detail=f"Processing error: {result.data}")
         else:
             output = await run_remote_job(
@@ -158,6 +159,7 @@ async def process_prompt(query: dict):
             )
             
     except Exception as e:
+        print(str(e))
         raise HTTPException(500, detail=f"Error processing request: {str(e)}")
 
 @app.post('/api/v2/stop')

@@ -318,7 +318,7 @@ class Pod:
         self.is_working = True
         self.latest_updated_time = time.time()
         while time.time() - self.latest_updated_time < POD_REQUEST_TIMEOUT_RETRY_MAX:
-            if self.state == PodState.Free:
+            if self.state == PodState.Free and self.pod_info:
                 break
             elif self.state == PodState.Creating or \
                 self.state == PodState.Starting or \

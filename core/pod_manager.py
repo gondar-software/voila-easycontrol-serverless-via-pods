@@ -1,6 +1,9 @@
 import requests
 import uuid
 import time
+import numpy as np
+from collections import \
+    deque
 from threading import \
     Thread, \
     Lock
@@ -19,7 +22,9 @@ from .constants import \
     POD_MAX_NUM, \
     RUNPOD_API, \
     POD_REQUEST_TIMEOUT_RETRY_MAX, \
-    POD_RETRY_DELAY
+    POD_RETRY_DELAY, \
+    POD_MIN_NUM, \
+    POD_SCALING_SENSIVITY
 
 class PodManager:
     def __init__(
@@ -43,6 +48,7 @@ class PodManager:
             "Content-Type": "application/json"
         })
 
+        self._prompts_histories = deque([], maxlen=300)
         self._pods: List[Pod] = []
         self._queued_prompts: Dict[str, Prompt] = {}
         self._processing_prompts: Dict[str, Prompt] = {}
@@ -85,6 +91,11 @@ class PodManager:
     def pods(self) -> List[Pod]:
         with self._lock:
             return self._pods
+
+    @property
+    def prompts_histories(self) -> deque:
+        with self._lock:
+            return self._prompts_histories
 
     @property
     def queued_prompts(self) -> Dict[str, Prompt]:
@@ -136,6 +147,18 @@ class PodManager:
         )
         background_thread.daemon = True
         background_thread.start()
+
+    def _calc_num_pods(self) -> int:
+        num_prompts = len(self.queued_prompts) + len(self.processing_prompts)
+        self.prompts_histories.append(num_prompts)
+        
+        avg_load = np.average(self.prompts_histories)
+        peak_load = max(self.prompts_histories)
+        
+        weighted_load = (avg_load * (100. - POD_SCALING_SENSIVITY) / 100. + 
+                       peak_load * (POD_SCALING_SENSIVITY / 100.))
+        
+        return min(POD_MAX_NUM, POD_MIN_NUM + round(weighted_load * 1.2))
 
     def _check_existing_pods(
         self
@@ -235,18 +258,42 @@ class PodManager:
                     thread.start()
                     break
 
-            for pod in sorted(
-                    self.pods, 
-                    key=lambda pod: (
-                        pod.state != PodState.Stopped,
-                        pod.state != PodState.Creating,
-                        pod.state != PodState.Starting,
-                        pod.latest_updated_time
-                    )
-                ):
-                if time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
-                    pod.stop()
-                
+            num_pods = self._calc_num_pods()
+            cur_num_pods = len([pod for pod in self.pods 
+                    if pod.state == PodState.Creating or 
+                    pod.state == PodState.Starting or
+                    pod.state == PodState.Processing or
+                    pod.state == PodState.Free])
+            if cur_num_pods > num_pods:
+                extra_num = cur_num_pods - num_pods
+                extra_count = 0
+                for _ in range(extra_num):
+                    for pod in sorted(
+                            self.pods, 
+                            key=lambda pod: (
+                                pod.latest_updated_time
+                            )
+                        ):
+                        if pod.state != PodState.Stopped and \
+                            pod.state != PodState.Terminated and \
+                            not pod.is_working and \
+                            time.time() - pod.latest_updated_time > POD_REQUEST_TIMEOUT_RETRY_MAX:
+                            if pod.stop():
+                                extra_count += 1
+                        if extra_count >= extra_num:
+                            break
+            else:
+                extra_num = num_pods - cur_num_pods
+                extra_count = 0
+                for _ in range(extra_num):
+                    for pod in self.pods:
+                        if pod.state == PodState.Stopped:
+                            if pod.resume():
+                                extra_count += 1
+                        if extra_count >= extra_num:
+                            break
+            
+            for pod in self.pods:
                 if pod.state == PodState.Terminated:
                     if pod.destroy():
                         self.pods.remove(pod)
@@ -260,10 +307,19 @@ class PodManager:
         prompt: Prompt
     ):
         self.processing_prompts[id] = prompt
-        response = pod.queue(prompt)
-        res_prompt = self.processing_prompts.pop(id)
-        res_prompt.result = response
-        self.completed_prompts[id] = res_prompt
+        try:
+            response = pod.queue(prompt)
+            res_prompt = self.processing_prompts.pop(id)
+            res_prompt.result = response
+            self.completed_prompts[id] = res_prompt
+        except:
+            pod.is_working = False
+            res_prompt = self.processing_prompts.pop(id)
+            res_prompt.result = PromptResult(
+                "error",
+                "unknown error occurred."
+            )
+            self.completed_prompts[id] = res_prompt
 
     def queue_prompt(
         self, 
