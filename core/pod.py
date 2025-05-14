@@ -324,7 +324,7 @@ class Pod:
                 self.state == PodState.Starting or \
                 self.state == PodState.Processing:
                 time.sleep(POD_RETRY_DELAY / 1000.)
-            elif self.state == PodState.Terminated or PodState.Stopped:
+            elif self.state == PodState.Terminated or self.state == PodState.Stopped:
                 self._is_working = False
                 self.latest_updated_time = time.time()
                 return PromptResult(

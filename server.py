@@ -19,7 +19,8 @@ from core.constants import \
     POD_EASYCONTROL_IMAGE_NAME, \
     SERVERLESS_EASYCONTROL_ENDPOINT_ID, \
     ORIGIN_IMAGE_URL, \
-    POD_MAX_NUM
+    POD_MAX_NUM, \
+    RUNPOD_API
 from core.types import PodState, Prompt
 
 class RequestCounter:
@@ -94,7 +95,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-runpod.api_key = os.getenv("RUNPOD_API")
+runpod.api_key = RUNPOD_API
 
 async def run_remote_job(url: str, workflow_id: int):
     """Generic function to run jobs on remote endpoints"""
@@ -143,7 +144,6 @@ async def process_prompt(query: dict):
                     content=result.data["content"],
                     media_type=result.data["media_type"]
                 )
-            print(result.data)
             raise HTTPException(500, detail=f"Processing error: {result.data}")
         else:
             output = await run_remote_job(
