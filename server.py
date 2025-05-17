@@ -188,7 +188,7 @@ async def restart_service():
     return {"status": "restarted"}
 
 def set_max_threads():
-    new_max_workers = POD_MAX_NUM * 2
+    new_max_workers = POD_MAX_NUM * 3
     executor = ThreadPoolExecutor(max_workers=new_max_workers)
     loop = asyncio.get_event_loop()
     loop.set_default_executor(executor)

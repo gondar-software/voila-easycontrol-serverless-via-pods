@@ -142,11 +142,16 @@ class PodManager:
 
     def _initialize(self):
         self._check_existing_pods()
-        background_thread = Thread(
+        background_thread1 = Thread(
             target=self._background_work
         )
-        background_thread.daemon = True
-        background_thread.start()
+        background_thread1.daemon = True
+        background_thread1.start()
+        background_thread2 = Thread(
+            target=self._clear_prompts
+        )
+        background_thread2.daemon = True
+        background_thread2.start()
 
     def _calc_num_pods(self) -> int:
         num_prompts = len(self.queued_prompts) + len(self.processing_prompts)
@@ -248,7 +253,9 @@ class PodManager:
                         continue
                         
                     key = next(iter(self.queued_prompts))
-                    prompt = self.queued_prompts.pop(key)
+                    prompt = self.queued_prompts.pop(key, None)
+                    if prompt is None:
+                        continue
                     
                     thread = Thread(
                         target=self._process_request,
@@ -309,17 +316,48 @@ class PodManager:
         self.processing_prompts[id] = prompt
         try:
             response = pod.queue(prompt)
-            res_prompt = self.processing_prompts.pop(id)
+            res_prompt = self.processing_prompts.pop(id, None)
+            if res_prompt is None:
+                return
             res_prompt.result = response
             self.completed_prompts[id] = res_prompt
         except:
             pod.is_working = False
-            res_prompt = self.processing_prompts.pop(id)
+            res_prompt = self.processing_prompts.pop(id, None)
+            if res_prompt is None:
+                return
             res_prompt.result = PromptResult(
                 "error",
                 "unknown error occurred."
             )
             self.completed_prompts[id] = res_prompt
+
+    def _clear_prompts(
+        self
+    ):
+        while not self.stopped:
+            current_time = time.time()
+            timeout = POD_REQUEST_TIMEOUT_RETRY_MAX
+
+            expired_queued = [key for key, prompt in self.queued_prompts.items() 
+                            if current_time - prompt.start_time > timeout]
+                            
+            expired_processing = [key for key, prompt in self.processing_prompts.items() 
+                                if current_time - prompt.start_time > timeout]
+                                
+            expired_completed = [key for key, prompt in self.completed_prompts.items() 
+                                if current_time - prompt.start_time > timeout]
+
+            for key in expired_queued:
+                self.queued_prompts.pop(key, None)
+                
+            for key in expired_processing:
+                self.processing_prompts.pop(key, None)
+                
+            for key in expired_completed:
+                self.completed_prompts.pop(key, None)
+
+            time.sleep(POD_RETRY_DELAY / 1000.)
 
     def queue_prompt(
         self, 
@@ -329,12 +367,21 @@ class PodManager:
         key = str(id)
         self.queued_prompts[key] = prompt
 
-        while True:
+        start_time = time.time()
+
+        while time.time() - start_time < POD_REQUEST_TIMEOUT_RETRY_MAX:
             res_prompt = self.completed_prompts.pop(key, None)
             if res_prompt:
                 return res_prompt.result
             else:
                 time.sleep(POD_RETRY_DELAY / 1000.)
+
+        else:
+            prompt.result = PromptResult(
+                "error",
+                "request timeout."
+            )
+            return prompt.result
 
     def stop(
         self

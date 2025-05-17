@@ -1,3 +1,4 @@
+import time
 from enum import Enum
 from typing import Dict, List, Optional
 
@@ -35,6 +36,7 @@ class Prompt:
         self.url = url
         self.workflow_id = workflow_id
         self.result: Optional[PromptResult] = None
+        self.start_time: float = time.time()
 
 class PromptResult:
     def __init__(
