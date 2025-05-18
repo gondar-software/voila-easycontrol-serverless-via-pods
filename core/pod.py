@@ -315,7 +315,6 @@ class Pod:
         self, 
         prompt: Prompt
     ) -> PromptResult:
-        self.is_working = True
         self.latest_updated_time = time.time()
         while time.time() - self.latest_updated_time < POD_REQUEST_TIMEOUT_RETRY_MAX:
             if self.state == PodState.Free and self.pod_info:
@@ -325,7 +324,6 @@ class Pod:
                 self.state == PodState.Processing:
                 time.sleep(POD_RETRY_DELAY / 1000.)
             elif self.state == PodState.Terminated or self.state == PodState.Stopped:
-                self._is_working = False
                 self.latest_updated_time = time.time()
                 return PromptResult(
                     "error",
@@ -333,7 +331,6 @@ class Pod:
                 )
         else:
             self.latest_updated_time = time.time()
-            self._is_working = False
             return PromptResult(
                 "error",
                 "Processing timeout."
@@ -348,11 +345,9 @@ class Pod:
                 json={
                     "url": prompt.url,
                     "workflow_id": prompt.workflow_id
-                },
-                timeout=POD_REQUEST_TIMEOUT_RETRY_MAX
+                }
             )
             response.raise_for_status()
-            self._is_working = False
             self.state = PodState.Free
             self.latest_updated_time = time.time()
             return PromptResult(
@@ -363,7 +358,6 @@ class Pod:
                 }
             )
         except:
-            self._is_working = False
             self.state = PodState.Free
             self.latest_updated_time = time.time()
             return PromptResult(
@@ -385,6 +379,7 @@ class Pod:
                 pass
             self.pod_info = None
             self.state = PodState.Stopped
+            self.is_working = False
             return True
         except:
             return False

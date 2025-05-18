@@ -160,6 +160,7 @@ async def process_prompt(query: dict):
             
     except Exception as e:
         print(str(e))
+        print(str(e))
         raise HTTPException(500, detail=f"Error processing request: {str(e)}")
 
 @app.post('/api/v2/stop')

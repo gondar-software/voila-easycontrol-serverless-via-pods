@@ -314,9 +314,11 @@ class PodManager:
         prompt: Prompt
     ):
         self.processing_prompts[id] = prompt
+        pod.is_working = True
         try:
             response = pod.queue(prompt)
             res_prompt = self.processing_prompts.pop(id, None)
+            pod.is_working = False
             if res_prompt is None:
                 return
             res_prompt.result = response
