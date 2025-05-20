@@ -129,34 +129,36 @@ async def process_prompt(query: dict):
         url = query.get("url", ORIGIN_IMAGE_URL)
         workflow_id = query.get("workflow_id", 1)
         
-        if current_count % 2 == 0:
-            result = await asyncio.to_thread(
-                app_state.managers["easycontrol"].queue_prompt,
-                Prompt(
-                    url,
-                    workflow_id
-                )
-            )
-            
-            if result.status == "success":
-                print(f"mode1: {(time.time() - start_time):.4f} seconds")
-                return Response(
-                    content=result.data["content"],
-                    media_type=result.data["media_type"]
-                )
-            raise HTTPException(500, detail=f"Processing error: {result.data}")
-        else:
-            output = await run_remote_job(
+        # if current_count % 2 == 0:
+
+        result = await asyncio.to_thread(
+            app_state.managers["easycontrol"].queue_prompt,
+            Prompt(
                 url,
                 workflow_id
             )
-            
-            print(f"mode2: {(time.time() - start_time):.4f} seconds")
-            base64_image = output["message"]
+        )
+        
+        if result.status == "success":
+            print(f"mode1: {(time.time() - start_time):.4f} seconds")
             return Response(
-                content=base64.b64decode(base64_image),
-                media_type="image/jpeg"
+                content=result.data["content"],
+                media_type=result.data["media_type"]
             )
+        raise HTTPException(500, detail=f"Processing error: {result.data}")
+    
+        # else:
+        #     output = await run_remote_job(
+        #         url,
+        #         workflow_id
+        #     )
+            
+        #     print(f"mode2: {(time.time() - start_time):.4f} seconds")
+        #     base64_image = output["message"]
+        #     return Response(
+        #         content=base64.b64decode(base64_image),
+        #         media_type="image/jpeg"
+        #     )
             
     except Exception as e:
         print(str(e))
